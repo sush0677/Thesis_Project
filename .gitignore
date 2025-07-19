@@ -1,0 +1,66 @@
+# Google Cluster Data Files - Large files that shouldn't be in git
+data/google_cluster/
+data/google_cluster/*
+data/processed/
+data/processed/*
+
+# All data files and directories
+data/
+data/*
+data/**/*
+
+# Specific large files
+*.json.gz
+*.parquet.gz
+*.csv.gz
+*.parquet
+*.json
+*.csv
+
+# Google Cluster specific patterns
+instance_events-*.json.gz
+instance_events-*.parquet.gz
+cluster_workload_patterns.json
+feature_statistics.json
+workload_patterns.json
+processed_data.parquet
+
+# Model files (can be regenerated)
+src/models/
+src/models/*
+
+# Log files
+*.log
+logs/
+
+# Python cache
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Virtual environment
+venv/
+env/
+.venv/
+.env/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Jupyter notebooks
+.ipynb_checkpoints/
+
+# Temporary files
+*.tmp
+*.temp
