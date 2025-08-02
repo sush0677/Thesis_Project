@@ -74,23 +74,74 @@ class WorkloadGenerator:
     
     def _load_real_cluster_data(self) -> Optional[pd.DataFrame]:
         """
-        Load real Google Cluster data from processed files.
+        Load real Google Cluster data from raw files.
         
         Returns:
             DataFrame with real cluster data or None if not available
         """
         try:
-            # Try to load processed data
+            # First try to load from processed data (if available)
             processed_file = self.data_dir / 'processed_data.parquet'
             if processed_file.exists():
                 data = pd.read_parquet(processed_file)
-                logger.info(f"Loaded real Google Cluster data: {len(data)} records")
+                logger.info(f"✅ Loaded processed Google Cluster data: {len(data)} records")
+                logger.info(f"✅ Data columns: {list(data.columns)}")
                 return data
-            else:
-                logger.warning("Processed Google Cluster data not found")
+            
+            # If processed data not available, try to load from raw google cluster data
+            logger.info("⚠️ Processed data not found, attempting to load from raw Google Cluster data...")
+            
+            # Look for parquet files in the cache directory
+            parquet_files = list(self.cache_dir.glob('*.parquet.gz'))
+            if not parquet_files:
+                logger.error(f"❌ No parquet files found in {self.cache_dir}")
                 return None
+            
+            # Load the first available parquet file
+            data_file = parquet_files[0]
+            logger.info(f"📁 Loading data from: {data_file}")
+            
+            # Read the compressed parquet file
+            data = pd.read_parquet(data_file)
+            logger.info(f"✅ Loaded raw Google Cluster data: {len(data)} records")
+            logger.info(f"✅ Data columns: {list(data.columns)}")
+            
+            # Basic data preprocessing
+            if 'timestamp' not in data.columns:
+                # Add timestamp if not present
+                data['timestamp'] = range(len(data))
+            
+            # Ensure we have the required columns for workload generation
+            required_columns = ['cpu_usage', 'memory_usage', 'disk_io', 'network_io']
+            available_columns = list(data.columns)
+            
+            # Map available columns to required columns if needed
+            column_mapping = {}
+            for col in required_columns:
+                if col in available_columns:
+                    column_mapping[col] = col
+                elif col.replace('_', '') in available_columns:
+                    column_mapping[col] = col.replace('_', '')
+                else:
+                    # Use default values if column not found
+                    data[col] = 0.5  # Default value
+                    column_mapping[col] = col
+            
+            # Add missing columns with default values
+            if 'active_machines' not in data.columns:
+                data['active_machines'] = 50
+            if 'active_tasks' not in data.columns:
+                data['active_tasks'] = 100
+            if 'cpu_memory_ratio' not in data.columns:
+                data['cpu_memory_ratio'] = data['cpu_usage'] / (data['memory_usage'] + 1e-6)
+            if 'io_ratio' not in data.columns:
+                data['io_ratio'] = data['disk_io'] / (data['network_io'] + 1e-6)
+            
+            logger.info(f"✅ Preprocessed Google Cluster data with {len(data)} records")
+            return data
+            
         except Exception as e:
-            logger.error(f"Error loading cluster data: {e}")
+            logger.error(f"❌ Error loading cluster data: {e}")
             return None
     
     def _load_feature_statistics(self) -> Optional[Dict[str, Any]]:
@@ -101,67 +152,109 @@ class WorkloadGenerator:
             Dictionary with feature statistics or None if not available
         """
         try:
+            # First try to load from processed directory
             stats_file = self.data_dir / 'feature_statistics.json'
             if stats_file.exists():
                 with open(stats_file, 'r') as f:
                     stats = json.load(f)
-                logger.info("Loaded real Google Cluster feature statistics")
+                logger.info(f"✅ Loaded feature statistics: {list(stats.keys())}")
+                return stats
+            
+            # If not found, try to load from cache directory
+            cache_stats_file = self.cache_dir / 'feature_statistics.json'
+            if cache_stats_file.exists():
+                with open(cache_stats_file, 'r') as f:
+                    stats = json.load(f)
+                logger.info(f"✅ Loaded feature statistics from cache: {list(stats.keys())}")
+                return stats
+            
+            # If still not found, generate statistics from loaded data
+            if self.cluster_data is not None:
+                logger.info("📊 Generating feature statistics from loaded data...")
+                stats = self._generate_feature_statistics()
+                logger.info(f"✅ Generated feature statistics: {list(stats.keys())}")
                 return stats
             else:
-                logger.warning("Feature statistics not found")
+                logger.error(f"❌ Feature statistics not found and no data available to generate from")
                 return None
+                
         except Exception as e:
-            logger.error(f"Error loading feature statistics: {e}")
+            logger.error(f"❌ Error loading feature statistics: {e}")
             return None
     
     def _load_workload_patterns(self) -> Optional[Dict[str, Any]]:
         """
-        Load real workload patterns from Google Cluster data.
+        Load workload patterns from real Google Cluster data.
         
         Returns:
             Dictionary with workload patterns or None if not available
         """
         try:
+            # First try to load from processed directory
             patterns_file = self.data_dir / 'workload_patterns.json'
             if patterns_file.exists():
                 with open(patterns_file, 'r') as f:
                     patterns = json.load(f)
-                logger.info("Loaded real Google Cluster workload patterns")
+                logger.info(f"✅ Loaded workload patterns: {list(patterns.keys())}")
+                return patterns
+            
+            # If not found, try to load from cache directory
+            cache_patterns_file = self.cache_dir / 'workload_patterns.json'
+            if cache_patterns_file.exists():
+                with open(cache_patterns_file, 'r') as f:
+                    patterns = json.load(f)
+                logger.info(f"✅ Loaded workload patterns from cache: {list(patterns.keys())}")
+                return patterns
+            
+            # If still not found, generate patterns from loaded data
+            if self.cluster_data is not None:
+                logger.info("📊 Generating workload patterns from loaded data...")
+                patterns = self._generate_workload_patterns()
+                logger.info(f"✅ Generated workload patterns: {list(patterns.keys())}")
                 return patterns
             else:
-                logger.warning("Workload patterns not found")
+                logger.error(f"❌ Workload patterns not found and no data available to generate from")
                 return None
+                
         except Exception as e:
-            logger.error(f"Error loading workload patterns: {e}")
+            logger.error(f"❌ Error loading workload patterns: {e}")
             return None
     
     def _split_data(self) -> Tuple[List[Dict], List[Dict], List[Dict]]:
         """
-        Split the real data into training, validation, and test sets.
+        Split the real Google Cluster data into train/validation/test sets.
         
         Returns:
-            Tuple of (train_data, val_data, test_data)
+            Tuple of (train_data, val_data, test_data) as lists of dictionaries
         """
         if self.cluster_data is None:
-            logger.warning("No real data available, using synthetic data")
+            logger.warning("❌ No cluster data available for splitting")
             return [], [], []
         
-        # Convert DataFrame to list of dictionaries
-        data_list = self.cluster_data.to_dict('records')
+        try:
+            # Convert DataFrame to list of dictionaries
+            data_list = self.cluster_data.to_dict('records')
         
-        # Calculate split indices
-        n_total = len(data_list)
-        n_train = int(n_total * self.train_ratio)
-        n_val = int(n_total * self.val_ratio)
+            # Calculate split indices
+            total_size = len(data_list)
+            train_size = int(total_size * self.train_ratio)
+            val_size = int(total_size * self.val_ratio)
         
-        # Split the data
-        train_data = data_list[:n_train]
-        val_data = data_list[n_train:n_train + n_val]
-        test_data = data_list[n_train + n_val:]
+            # Split the data
+            train_data = data_list[:train_size]
+            val_data = data_list[train_size:train_size + val_size]
+            test_data = data_list[train_size + val_size:]
         
-        logger.info(f"Data split: Train={len(train_data)}, Val={len(val_data)}, Test={len(test_data)}")
+            logger.info(f"✅ Data split completed:")
+            logger.info(f"   - Training: {len(train_data)} records ({len(train_data)/total_size*100:.1f}%)")
+            logger.info(f"   - Validation: {len(val_data)} records ({len(val_data)/total_size*100:.1f}%)")
+            logger.info(f"   - Test: {len(test_data)} records ({len(test_data)/total_size*100:.1f}%)")
         
-        return train_data, val_data, test_data
+            return train_data, val_data, test_data
+            
+        except Exception as e:
+            logger.error(f"❌ Error splitting data: {e}")
+            return [], [], []
     
     def set_mode(self, mode: str) -> bool:
         """
@@ -211,15 +304,25 @@ class WorkloadGenerator:
         """
         self.step_counter += 1
         
-        # Use real data if available
-        if self.cluster_data is not None and self.workload_patterns is not None:
+        # Check if we have real data available
+        if self.cluster_data is not None and len(self.train_data) > 0:
+            logger.debug(f"🟢 Using REAL Google Cluster data for workload generation")
             workload = self.patterns[self.current_pattern]()
+            
+            # Check if we got a valid workload
+            if workload and isinstance(workload, dict):
+                logger.debug(f"✅ Generated real workload for pattern: {self.current_pattern}")
+                return workload
+            else:
+                logger.warning(f"⚠️ Pattern {self.current_pattern} returned invalid workload, using synthetic")
+                return self._generate_synthetic_workload()
+                
         else:
             # Fallback to synthetic patterns
-            logger.warning("Using synthetic patterns - real data not available")
-            workload = self._generate_synthetic_workload()
-        
-        return workload
+            logger.warning("⚠️ Using synthetic patterns - real data not available")
+            logger.warning(f"   - cluster_data: {'✅' if self.cluster_data is not None else '❌'}")
+            logger.warning(f"   - train_data: {'✅' if len(self.train_data) > 0 else '❌'}")
+            return self._generate_synthetic_workload()
     
     def _get_real_data_point(self) -> Optional[Dict[str, float]]:
         """
@@ -228,19 +331,27 @@ class WorkloadGenerator:
         Returns:
             Dictionary with real data features or None if not available
         """
+        # Determine which dataset to use based on current mode
         if self.current_mode == 'train':
             data = self.train_data
+            mode_name = "training"
         elif self.current_mode == 'val':
             data = self.val_data
+            mode_name = "validation"
         else:  # test
             data = self.test_data
+            mode_name = "test"
         
         if not data:
+            logger.warning(f"❌ No {mode_name} data available")
             return None
         
         # Get data point and advance index
         data_point = data[self.data_index % len(data)]
         self.data_index += 1
+        
+        # Log the real data point for debugging
+        logger.debug(f"📊 Real data point from {mode_name} set: {list(data_point.keys())}")
         
         return data_point
     
@@ -253,20 +364,26 @@ class WorkloadGenerator:
         """
         data_point = self._get_real_data_point()
         
-        if data_point and self.workload_patterns and 'steady' in self.workload_patterns:
-            # Use real steady pattern
-            pattern = self.workload_patterns['steady']
+        if data_point:
+            # Use real data point directly
+            cpu_demand = data_point.get('cpu_usage', 0.4)
+            memory_demand = data_point.get('memory_usage', 0.5)
+            disk_demand = data_point.get('disk_io', 0.3)
+            network_demand = data_point.get('network_io', 0.4)
             
-            # Add realistic noise based on real data
-            cpu_noise = np.random.normal(0, pattern.get('cpu_std', 0.05))
-            memory_noise = np.random.normal(0, pattern.get('memory_std', 0.05))
-            disk_noise = np.random.normal(0, pattern.get('disk_std', 0.05))
-            network_noise = np.random.normal(0, pattern.get('network_std', 0.05))
+            # Add small noise for variation
+            cpu_demand += np.random.normal(0, 0.02)
+            memory_demand += np.random.normal(0, 0.02)
+            disk_demand += np.random.normal(0, 0.02)
+            network_demand += np.random.normal(0, 0.02)
             
-            cpu_demand = np.clip(pattern.get('cpu_mean', 0.5) + cpu_noise, 0.1, 0.9)
-            memory_demand = np.clip(pattern.get('memory_mean', 0.5) + memory_noise, 0.1, 0.9)
-            disk_demand = np.clip(pattern.get('disk_mean', 0.5) + disk_noise, 0.1, 0.9)
-            network_demand = np.clip(pattern.get('network_mean', 0.5) + network_noise, 0.1, 0.9)
+            # Clip to valid range
+            cpu_demand = np.clip(cpu_demand, 0.1, 0.9)
+            memory_demand = np.clip(memory_demand, 0.1, 0.9)
+            disk_demand = np.clip(disk_demand, 0.1, 0.9)
+            network_demand = np.clip(network_demand, 0.1, 0.9)
+            
+            logger.debug(f"✅ Generated real steady workload from data point")
             
             return {
                 'compute_demand': np.array([cpu_demand, memory_demand, network_demand]),
@@ -276,6 +393,7 @@ class WorkloadGenerator:
             }
         else:
             # Fallback to synthetic
+            logger.warning("⚠️ No real data point available, using synthetic steady workload")
             return self._generate_synthetic_steady_workload()
     
     def _generate_real_burst_workload(self) -> Dict[str, np.ndarray]:
@@ -287,46 +405,46 @@ class WorkloadGenerator:
         """
         data_point = self._get_real_data_point()
         
-        if data_point and self.workload_patterns and 'burst' in self.workload_patterns:
-            # Use real burst pattern
-            pattern = self.workload_patterns['burst']
+        if data_point:
+            # Use real data point as base
+            cpu_base = data_point.get('cpu_usage', 0.4)
+            memory_base = data_point.get('memory_usage', 0.5)
+            disk_base = data_point.get('disk_io', 0.3)
+            network_base = data_point.get('network_io', 0.4)
             
             # Determine if we're in a burst period
-            burst_prob = pattern.get('burst_probability', 0.1)
-            burst_magnitude = pattern.get('burst_magnitude', 3.0)
-            burst_duration = pattern.get('burst_duration', [5, 15])
+            burst_prob = 0.1
+            burst_magnitude = 2.5
             
             # Check if current step is in burst period
             burst_cycle = 50
-            in_burst = (self.step_counter % burst_cycle) < np.random.randint(*burst_duration)
+            in_burst = (self.step_counter % burst_cycle) < np.random.randint(5, 15)
             
             if in_burst and np.random.random() < burst_prob:
                 # Burst period - high demand
                 multiplier = burst_magnitude
+                logger.debug(f"🔥 Burst period detected, multiplier: {multiplier}")
             else:
                 # Normal period - low demand
                 multiplier = 1.0
             
-            # Base demands from real pattern
-            cpu_base = pattern.get('cpu_mean', 0.35) * multiplier
-            memory_base = pattern.get('memory_mean', 0.35) * multiplier
-            disk_base = pattern.get('disk_mean', 0.35) * multiplier
-            network_base = pattern.get('network_mean', 0.35) * multiplier
+            # Apply burst multiplier
+            cpu_demand = np.clip(cpu_base * multiplier, 0.1, 0.9)
+            memory_demand = np.clip(memory_base * multiplier, 0.1, 0.9)
+            disk_demand = np.clip(disk_base * multiplier, 0.1, 0.9)
+            network_demand = np.clip(network_base * multiplier, 0.1, 0.9)
             
-            # Add realistic noise
-            cpu_demand = np.clip(cpu_base + np.random.normal(0, pattern.get('cpu_std', 0.08)), 0.1, 0.95)
-            memory_demand = np.clip(memory_base + np.random.normal(0, pattern.get('memory_std', 0.08)), 0.1, 0.95)
-            disk_demand = np.clip(disk_base + np.random.normal(0, pattern.get('disk_std', 0.08)), 0.1, 0.95)
-            network_demand = np.clip(network_base + np.random.normal(0, pattern.get('network_std', 0.08)), 0.1, 0.95)
+            logger.debug(f"✅ Generated real burst workload from data point")
             
             return {
                 'compute_demand': np.array([cpu_demand, memory_demand, network_demand]),
                 'storage_demand': disk_demand,
                 'network_demand': network_demand,
-                'database_demand': np.array([cpu_demand * 0.7, disk_demand * 0.9])
+                'database_demand': np.array([cpu_demand * 0.8, disk_demand * 0.9])
             }
         else:
             # Fallback to synthetic
+            logger.warning("⚠️ No real data point available, using synthetic burst workload")
             return self._generate_synthetic_burst_workload()
     
     def _generate_real_cyclical_workload(self) -> Dict[str, np.ndarray]:
@@ -338,40 +456,46 @@ class WorkloadGenerator:
         """
         data_point = self._get_real_data_point()
         
-        if data_point and self.workload_patterns and 'cyclical' in self.workload_patterns:
-            # Use real cyclical pattern
-            pattern = self.workload_patterns['cyclical']
-            
-            # Get cyclical parameters
-            period = pattern.get('period', 24)  # hours
-            cpu_amplitude = pattern.get('cpu_amplitude', 0.4)
-            memory_amplitude = pattern.get('memory_amplitude', 0.3)
-            disk_amplitude = pattern.get('disk_amplitude', 0.3)
-            network_amplitude = pattern.get('network_amplitude', 0.4)
-            
-            # Calculate cyclical component
-            cycle_progress = 2 * np.pi * (self.step_counter % (period * 8)) / (period * 8)
-            
-            # Base demands with cyclical variation
-            cpu_base = pattern.get('cpu_mean', 0.5)
-            memory_base = pattern.get('memory_mean', 0.5)
-            disk_base = pattern.get('disk_mean', 0.5)
-            network_base = pattern.get('network_mean', 0.5)
+        if data_point:
+            # Use real data point as base
+            cpu_base = data_point.get('cpu_usage', 0.4)
+            memory_base = data_point.get('memory_usage', 0.5)
+            disk_base = data_point.get('disk_io', 0.3)
+            network_base = data_point.get('network_io', 0.4)
             
             # Add cyclical variation
-            cpu_demand = np.clip(cpu_base + cpu_amplitude * np.sin(cycle_progress), 0.1, 0.9)
-            memory_demand = np.clip(memory_base + memory_amplitude * np.sin(cycle_progress + np.pi/6), 0.1, 0.9)
-            disk_demand = np.clip(disk_base + disk_amplitude * np.sin(cycle_progress + np.pi/3), 0.1, 0.9)
-            network_demand = np.clip(network_base + network_amplitude * np.sin(cycle_progress + np.pi/2), 0.1, 0.9)
+            period = 24  # 24 steps per cycle
+            phase = (self.step_counter % period) / period * 2 * np.pi
+            
+            # Different phases for different resources
+            cpu_phase = phase
+            memory_phase = phase + np.pi/2
+            disk_phase = phase + np.pi
+            network_phase = phase + 3*np.pi/2
+            
+            # Cyclical variation (amplitude 0.2)
+            cpu_variation = 0.2 * np.sin(cpu_phase)
+            memory_variation = 0.2 * np.sin(memory_phase)
+            disk_variation = 0.2 * np.sin(disk_phase)
+            network_variation = 0.2 * np.sin(network_phase)
+            
+            # Apply cyclical variation
+            cpu_demand = np.clip(cpu_base + cpu_variation, 0.1, 0.9)
+            memory_demand = np.clip(memory_base + memory_variation, 0.1, 0.9)
+            disk_demand = np.clip(disk_base + disk_variation, 0.1, 0.9)
+            network_demand = np.clip(network_base + network_variation, 0.1, 0.9)
+            
+            logger.debug(f"✅ Generated real cyclical workload from data point")
             
             return {
                 'compute_demand': np.array([cpu_demand, memory_demand, network_demand]),
                 'storage_demand': disk_demand,
                 'network_demand': network_demand,
-                'database_demand': np.array([cpu_demand * 0.8, disk_demand * 0.6])
+                'database_demand': np.array([cpu_demand * 0.8, disk_demand * 0.9])
             }
         else:
             # Fallback to synthetic
+            logger.warning("⚠️ No real data point available, using synthetic cyclical workload")
             return self._generate_synthetic_cyclical_workload()
     
     def _generate_real_web_service_workload(self) -> Dict[str, np.ndarray]:
@@ -720,3 +844,116 @@ class WorkloadGenerator:
             info['test_records'] = len(self.test_data)
         
         return info 
+
+    def _generate_feature_statistics(self) -> Dict[str, Any]:
+        """
+        Generate feature statistics from loaded cluster data.
+        
+        Returns:
+            Dictionary with feature statistics
+        """
+        if self.cluster_data is None:
+            return {}
+        
+        stats = {}
+        
+        # Calculate statistics for each feature
+        numeric_columns = self.cluster_data.select_dtypes(include=[np.number]).columns
+        
+        for col in numeric_columns:
+            if col in self.cluster_data.columns:
+                values = self.cluster_data[col].dropna()
+                if len(values) > 0:
+                    stats[col] = {
+                        'mean': float(values.mean()),
+                        'std': float(values.std()),
+                        'min': float(values.min()),
+                        'max': float(values.max()),
+                        'normalized': True
+                    }
+        
+        # Ensure we have the required features
+        required_features = ['cpu_usage', 'memory_usage', 'disk_io', 'network_io', 
+                           'active_machines', 'active_tasks', 'cpu_memory_ratio', 'io_ratio']
+        
+        for feature in required_features:
+            if feature not in stats:
+                # Use default statistics if feature not found
+                stats[feature] = {
+                    'mean': 0.5,
+                    'std': 0.2,
+                    'min': 0.0,
+                    'max': 1.0,
+                    'normalized': True
+                }
+        
+        return stats
+    
+    def _generate_workload_patterns(self) -> Dict[str, Any]:
+        """
+        Generate workload patterns from loaded cluster data.
+        
+        Returns:
+            Dictionary with workload patterns
+        """
+        if self.cluster_data is None:
+            return {}
+        
+        patterns = {}
+        
+        # Calculate base statistics from the data
+        cpu_mean = self.cluster_data['cpu_usage'].mean() if 'cpu_usage' in self.cluster_data.columns else 0.5
+        memory_mean = self.cluster_data['memory_usage'].mean() if 'memory_usage' in self.cluster_data.columns else 0.5
+        disk_mean = self.cluster_data['disk_io'].mean() if 'disk_io' in self.cluster_data.columns else 0.5
+        network_mean = self.cluster_data['network_io'].mean() if 'network_io' in self.cluster_data.columns else 0.5
+        
+        cpu_std = self.cluster_data['cpu_usage'].std() if 'cpu_usage' in self.cluster_data.columns else 0.1
+        memory_std = self.cluster_data['memory_usage'].std() if 'memory_usage' in self.cluster_data.columns else 0.1
+        disk_std = self.cluster_data['disk_io'].std() if 'disk_io' in self.cluster_data.columns else 0.1
+        network_std = self.cluster_data['network_io'].std() if 'network_io' in self.cluster_data.columns else 0.1
+        
+        # Steady pattern
+        patterns['steady'] = {
+            'type': 'steady',
+            'cpu_mean': cpu_mean,
+            'cpu_std': cpu_std * 0.5,  # Lower variation for steady
+            'memory_mean': memory_mean,
+            'memory_std': memory_std * 0.5,
+            'disk_mean': disk_mean,
+            'disk_std': disk_std * 0.5,
+            'network_mean': network_mean,
+            'network_std': network_std * 0.5
+        }
+        
+        # Burst pattern
+        patterns['burst'] = {
+            'type': 'burst',
+            'cpu_mean': cpu_mean * 0.7,  # Lower base for burst
+            'cpu_std': cpu_std * 1.5,    # Higher variation
+            'memory_mean': memory_mean * 0.7,
+            'memory_std': memory_std * 1.5,
+            'disk_mean': disk_mean * 0.7,
+            'disk_std': disk_std * 1.5,
+            'network_mean': network_mean * 0.7,
+            'network_std': network_std * 1.5,
+            'burst_probability': 0.1,
+            'burst_magnitude': 3.0,
+            'burst_duration': [5, 15]
+        }
+        
+        # Cyclical pattern
+        patterns['cyclical'] = {
+            'type': 'cyclical',
+            'cpu_mean': cpu_mean,
+            'cpu_amplitude': cpu_std * 2.0,
+            'memory_mean': memory_mean,
+            'memory_amplitude': memory_std * 1.8,
+            'disk_mean': disk_mean,
+            'disk_amplitude': disk_std * 1.5,
+            'network_mean': network_mean,
+            'network_amplitude': network_std * 1.8,
+            'period': 24,
+            'phase_shift': {'cpu': 0, 'memory': 2, 'disk': 4, 'network': 6}
+        }
+        
+        return patterns 

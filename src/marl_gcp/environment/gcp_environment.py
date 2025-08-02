@@ -128,6 +128,7 @@ class GCPEnvironment(gym.Env):
         # Step counter
         self.steps = 0
         self.max_steps = config.get('max_steps_per_episode', 200)
+        self.max_steps_per_episode = self.max_steps  # Alias for reward engine compatibility
         
         # Define action and observation spaces for each agent
         self._define_spaces()
@@ -586,7 +587,46 @@ class GCPEnvironment(gym.Env):
     
     def _calculate_rewards(self) -> Dict[str, float]:
         """
-        Calculate rewards for each agent.
+        Calculate rewards for each agent using the enhanced reward engine.
+        
+        Returns:
+            Dictionary of rewards for each agent
+        """
+        # Import the enhanced reward engine
+        try:
+            from marl_gcp.utils.reward_engine import EnhancedRewardEngine
+            
+            # Initialize reward engine if not already done
+            if not hasattr(self, 'reward_engine'):
+                self.reward_engine = EnhancedRewardEngine(self.config)
+            
+            # Prepare current state for reward calculation
+            current_state = self._prepare_state_for_rewards()
+            
+            # Calculate comprehensive rewards
+            rewards = self.reward_engine.calculate_comprehensive_rewards(
+                agents=['compute', 'storage', 'network', 'database'],
+                current_state=current_state,
+                actions={},  # Actions are not needed for current reward calculation
+                next_state=current_state,  # Same as current for now
+                episode_step=self.steps,
+                episode_length=self.max_steps_per_episode
+            )
+            
+            # Scale rewards
+            for agent in rewards:
+                rewards[agent] *= self.reward_scale
+            
+            return rewards
+            
+        except ImportError:
+            # Fallback to original reward calculation if enhanced engine not available
+            logger.warning("Enhanced reward engine not available, using fallback")
+            return self._calculate_rewards_fallback()
+    
+    def _calculate_rewards_fallback(self) -> Dict[str, float]:
+        """
+        Fallback reward calculation method.
         
         Returns:
             Dictionary of rewards for each agent
@@ -638,6 +678,184 @@ class GCPEnvironment(gym.Env):
                 rewards[agent] -= 1.0 * self.reward_scale
         
         return rewards
+    
+    def _prepare_state_for_rewards(self) -> Dict[str, Any]:
+        """
+        Prepare current state for enhanced reward calculation.
+        
+        Returns:
+            State dictionary for reward engine
+        """
+        utilization = self._calculate_utilization()
+        costs = self._calculate_costs()
+        
+        # Calculate performance metrics
+        latency = self._estimate_latency()
+        throughput = self._estimate_throughput()
+        
+        # Calculate reliability metrics
+        availability = self._calculate_availability()
+        error_rate = self._estimate_error_rate()
+        
+        # Calculate sustainability metrics
+        sustainability = self._calculate_sustainability_metrics()
+        
+        state = {
+            'resources': self.current_resources,
+            'workload_demand': np.mean(self.current_workload['compute_demand']),
+            'total_cost': sum(costs.values()),
+            'resource_utilization': np.mean([np.mean(utilization['compute']), utilization['storage']]),
+            'demand_satisfaction': self._calculate_demand_satisfaction(),
+            'latency': latency,
+            'throughput': throughput,
+            'availability': availability,
+            'error_rate': error_rate,
+            'resource_stability': self._calculate_resource_stability(),
+            'resource_waste': self._calculate_resource_waste(),
+            'cooling_efficiency': 0.8,  # Default value
+            'renewable_energy_usage': 0.8,  # Default value
+            'region': 'us-central1',  # Default region
+            'compute_hours': 1.0,  # Default value
+            'constraints': self.resource_constraints,
+            'sustainability_metrics': sustainability
+        }
+        
+        return state
+    
+    def _estimate_latency(self) -> float:
+        """Estimate system latency based on current resources."""
+        # Simplified latency estimation
+        base_latency = 50.0  # Base latency in ms
+        
+        # Latency increases with resource utilization
+        utilization = np.mean([np.mean(self._calculate_utilization()['compute']), 
+                             self._calculate_utilization()['storage']])
+        
+        # Network bandwidth affects latency
+        network_bandwidth = self.current_resources.get('network_bandwidth_gbps', 10)
+        network_factor = max(0.5, 1.0 - (network_bandwidth / 100.0))
+        
+        # Calculate estimated latency
+        estimated_latency = base_latency * (1 + utilization * 0.5) * network_factor
+        
+        return estimated_latency
+    
+    def _estimate_throughput(self) -> float:
+        """Estimate system throughput based on current resources."""
+        # Simplified throughput estimation
+        base_throughput = 100.0  # Base throughput in req/s
+        
+        # Throughput increases with compute resources
+        compute_factor = min(2.0, self.current_resources['instances'] / 10.0)
+        
+        # Storage affects throughput
+        storage_factor = min(1.5, self.current_resources['storage_gb'] / 1000.0)
+        
+        # Network bandwidth affects throughput
+        network_factor = min(2.0, self.current_resources.get('network_bandwidth_gbps', 10) / 50.0)
+        
+        # Calculate estimated throughput
+        estimated_throughput = base_throughput * compute_factor * storage_factor * network_factor
+        
+        return estimated_throughput
+    
+    def _calculate_availability(self) -> float:
+        """Calculate system availability."""
+        # Simplified availability calculation
+        base_availability = 0.99  # 99% base availability
+        
+        # Resource stability affects availability
+        stability = self._calculate_resource_stability()
+        
+        # Calculate availability
+        availability = base_availability * stability
+        
+        return availability
+    
+    def _estimate_error_rate(self) -> float:
+        """Estimate error rate based on current configuration."""
+        # Simplified error rate estimation
+        base_error_rate = 0.01  # 1% base error rate
+        
+        # Resource utilization affects error rate
+        utilization = np.mean([np.mean(self._calculate_utilization()['compute']), 
+                             self._calculate_utilization()['storage']])
+        
+        # High utilization increases error rate
+        if utilization > 0.9:
+            error_rate = base_error_rate * (1 + (utilization - 0.9) * 5)
+        else:
+            error_rate = base_error_rate
+        
+        return error_rate
+    
+    def _calculate_resource_stability(self) -> float:
+        """Calculate resource stability score."""
+        # Simplified stability calculation
+        # In a real system, this would track resource allocation changes over time
+        
+        # Check if resources are within reasonable bounds
+        instances = self.current_resources['instances']
+        storage = self.current_resources['storage_gb']
+        
+        # Stability decreases with extreme values
+        instance_stability = 1.0 - abs(instances - 10) / 20.0  # Optimal around 10 instances
+        storage_stability = 1.0 - abs(storage - 1000) / 2000.0  # Optimal around 1000 GB
+        
+        stability = (instance_stability + storage_stability) / 2.0
+        
+        return max(0.0, min(1.0, stability))
+    
+    def _calculate_demand_satisfaction(self) -> float:
+        """Calculate how well current resources satisfy demand."""
+        utilization = self._calculate_utilization()
+        
+        # Calculate satisfaction for each resource type
+        compute_satisfaction = np.mean(utilization['compute'])
+        storage_satisfaction = utilization['storage']
+        
+        # Overall satisfaction
+        satisfaction = (compute_satisfaction + storage_satisfaction) / 2.0
+        
+        return satisfaction
+    
+    def _calculate_resource_waste(self) -> float:
+        """Calculate resource waste percentage."""
+        utilization = self._calculate_utilization()
+        
+        # Waste is inverse of utilization
+        compute_waste = 1.0 - np.mean(utilization['compute'])
+        storage_waste = 1.0 - utilization['storage']
+        
+        # Average waste
+        waste = (compute_waste + storage_waste) / 2.0
+        
+        return waste
+    
+    def _calculate_sustainability_metrics(self) -> Dict[str, float]:
+        """Calculate sustainability metrics."""
+        # Simplified sustainability calculation
+        resources = self.current_resources
+        
+        # Carbon footprint estimation
+        compute_carbon = resources['instances'] * 0.1  # kg CO2 per instance
+        storage_carbon = resources['storage_gb'] * 0.0001  # kg CO2 per GB
+        network_carbon = resources.get('network_bandwidth_gbps', 10) * 0.01  # kg CO2 per Gbps
+        
+        total_carbon = compute_carbon + storage_carbon + network_carbon
+        
+        # Energy efficiency (simplified)
+        utilization = np.mean([np.mean(self._calculate_utilization()['compute']), 
+                             self._calculate_utilization()['storage']])
+        energy_efficiency = utilization  # Higher utilization = better efficiency
+        
+        return {
+            'carbon_footprint': total_carbon,
+            'energy_efficiency': energy_efficiency,
+            'renewable_usage': 0.8,  # Default 80% renewable
+            'resource_waste': self._calculate_resource_waste(),
+            'cooling_efficiency': 0.8  # Default cooling efficiency
+        }
     
     def _calculate_utilization(self) -> Dict[str, Any]:
         """

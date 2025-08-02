@@ -139,7 +139,22 @@ def get_default_config() -> Dict[str, Any]:
         'eval_episodes': 10,
         'num_episodes': 1000,
         'random_seed': 42,
-        'log_level': 'INFO'
+        'log_level': 'INFO',
+        
+        # Enhanced Reward Engine Configuration
+        'reward_engine': {
+            'reward_history_size': 1000,
+            'immediate_reward_weight': 0.7,
+            'delayed_reward_weight': 0.3,
+            'budget_limit': 1000.0,
+            'reward_shaping_enabled': True,
+            'reward_shaping_decay': 0.99,
+            'sustainability_weight': 0.15,
+            'performance_weight': 0.35,
+            'cost_weight': 0.25,
+            'reliability_weight': 0.20,
+            'utilization_weight': 0.05
+        }
     }
     
     return config 
