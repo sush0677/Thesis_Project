@@ -17,37 +17,194 @@ from marl_gcp.agents.base_agent import BaseAgent
 
 logger = logging.getLogger(__name__)
 
-class ComputeActorNetwork(nn.Module):
+
+class ComputeAgent(BaseAgent):
     """
-    Actor network for the Compute agent.
-    Maps states to actions for compute resources.
+    Compute Agent for managing GCP compute resources.
+    
+    This agent is responsible for:
+    - VM instance provisioning and scaling
+    - CPU allocation decisions
+    - Memory allocation optimization
+    - Instance type selection
     """
     
-    def __init__(self, state_dim: int, action_dim: int, hidden_dim: int = 256):
+    def __init__(self, config: Dict[str, Any]):
         """
-        Initialize the actor network.
+        Initialize the Compute Agent.
         
         Args:
-            state_dim: Dimension of the state space
-            action_dim: Dimension of the action space
-            hidden_dim: Dimension of hidden layers
+            config: Configuration dictionary for the compute agent
         """
-        super(ComputeActorNetwork, self).__init__()
+        # Compute-specific action space
+        # Actions: [instance_action, cpu_action, memory_action, scale_action]
+        # instance_action: 0=no_change, 1=add_instance, 2=remove_instance
+        # cpu_action: 0=no_change, 1=increase_cpu, 2=decrease_cpu  
+        # memory_action: 0=no_change, 1=increase_memory, 2=decrease_memory
+        # scale_action: 0=no_change, 1=scale_up, 2=scale_down
+        action_size = 3 * 3 * 3 * 3  # 81 discrete actions
         
-        self.fc1 = nn.Linear(state_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
-        self.fc3 = nn.Linear(hidden_dim, action_dim)
+        # State space includes:
+        # - Current instances, CPU, memory
+        # - Resource utilization
+        # - Workload demand
+        # - Budget constraints
+        # - Other agents' resource usage
+        state_size = 20  # Will be adjusted based on actual environment
         
-    def forward(self, state: torch.Tensor) -> torch.Tensor:
+        super().__init__(config, "compute", state_size, action_size)
+        
+        # Compute-specific parameters
+        self.instance_types = config.get('instance_types', ['n1-standard-1', 'n1-standard-2', 'n1-standard-4'])
+        self.max_instances = config.get('max_instances', 100)
+        self.max_cpus = config.get('max_cpus', 500)
+        self.max_memory = config.get('max_memory', 1000)
+        
+        # Reward weights for compute decisions
+        self.cpu_efficiency_weight = config.get('cpu_efficiency_weight', 0.3)
+        self.memory_efficiency_weight = config.get('memory_efficiency_weight', 0.3)
+        self.cost_efficiency_weight = config.get('cost_efficiency_weight', 0.4)
+        
+        logger.info(f"Compute Agent initialized with {action_size} actions and {state_size} state dimensions")
+    
+    def decode_action(self, action_index: int) -> Dict[str, int]:
         """
-        Forward pass through the network.
+        Decode the discrete action index into meaningful compute actions.
         
         Args:
-            state: State tensor
+            action_index: Index of the selected action
             
         Returns:
-            Action distribution parameters
+            Dictionary with decoded actions
         """
+        # Convert single action index to multi-dimensional action
+        instance_action = action_index // (3 * 3 * 3)
+        remaining = action_index % (3 * 3 * 3)
+        
+        cpu_action = remaining // (3 * 3)
+        remaining = remaining % (3 * 3)
+        
+        memory_action = remaining // 3
+        scale_action = remaining % 3
+        
+        return {
+            'instance_action': instance_action,  # 0=no_change, 1=add, 2=remove
+            'cpu_action': cpu_action,           # 0=no_change, 1=increase, 2=decrease
+            'memory_action': memory_action,     # 0=no_change, 1=increase, 2=decrease
+            'scale_action': scale_action        # 0=no_change, 1=scale_up, 2=scale_down
+        }
+    
+    def compute_reward_components(self, state: Dict[str, Any], action: Dict[str, int], 
+                                next_state: Dict[str, Any]) -> Dict[str, float]:
+        """
+        Compute reward components specific to compute resource management.
+        
+        Args:
+            state: Current state
+            action: Action taken
+            next_state: Resulting state
+            
+        Returns:
+            Dictionary with reward components
+        """
+        rewards = {}
+        
+        # CPU efficiency reward
+        cpu_utilization = next_state.get('cpu_utilization', 0.0)
+        cpu_target = 0.7  # Target 70% utilization
+        cpu_efficiency = 1.0 - abs(cpu_utilization - cpu_target)
+        rewards['cpu_efficiency'] = cpu_efficiency * self.cpu_efficiency_weight
+        
+        # Memory efficiency reward
+        memory_utilization = next_state.get('memory_utilization', 0.0)
+        memory_target = 0.8  # Target 80% utilization
+        memory_efficiency = 1.0 - abs(memory_utilization - memory_target)
+        rewards['memory_efficiency'] = memory_efficiency * self.memory_efficiency_weight
+        
+        # Cost efficiency reward (penalize over-provisioning)
+        total_cost = next_state.get('compute_cost', 0.0)
+        budget = next_state.get('budget_remaining', 1000.0)
+        cost_efficiency = min(1.0, budget / max(total_cost, 1.0))
+        rewards['cost_efficiency'] = cost_efficiency * self.cost_efficiency_weight
+        
+        # Penalty for constraint violations
+        instances = next_state.get('instances', 0)
+        cpus = next_state.get('cpus', 0)
+        memory = next_state.get('memory_gb', 0)
+        
+        constraint_penalty = 0.0
+        if instances > self.max_instances:
+            constraint_penalty += (instances - self.max_instances) * 0.1
+        if cpus > self.max_cpus:
+            constraint_penalty += (cpus - self.max_cpus) * 0.01
+        if memory > self.max_memory:
+            constraint_penalty += (memory - self.max_memory) * 0.01
+        
+        rewards['constraint_penalty'] = -constraint_penalty
+        
+        return rewards
+    
+    def get_state_features(self, environment_state: Dict[str, Any]) -> np.ndarray:
+        """
+        Extract relevant features for the compute agent from environment state.
+        
+        Args:
+            environment_state: Full environment state
+            
+        Returns:
+            Numpy array with state features
+        """
+        features = []
+        
+        # Current compute resources
+        features.extend([
+            environment_state.get('instances', 0) / self.max_instances,
+            environment_state.get('cpus', 0) / self.max_cpus,
+            environment_state.get('memory_gb', 0) / self.max_memory,
+        ])
+        
+        # Resource utilization
+        features.extend([
+            environment_state.get('cpu_utilization', 0.0),
+            environment_state.get('memory_utilization', 0.0),
+        ])
+        
+        # Workload characteristics
+        features.extend([
+            environment_state.get('workload_cpu_demand', 0.0),
+            environment_state.get('workload_memory_demand', 0.0),
+            environment_state.get('workload_priority', 0.5),
+        ])
+        
+        # Budget and cost
+        features.extend([
+            environment_state.get('budget_used', 0.0) / environment_state.get('max_budget', 1000.0),
+            environment_state.get('compute_cost', 0.0) / environment_state.get('max_budget', 1000.0),
+        ])
+        
+        # Other agents' resource usage (coordination)
+        features.extend([
+            environment_state.get('storage_gb', 0.0) / 10000.0,  # Normalize storage
+            environment_state.get('network_load', 0.0),
+            environment_state.get('database_load', 0.0),
+        ])
+        
+        # Time and seasonal factors
+        features.extend([
+            environment_state.get('time_of_day', 0.5),
+            environment_state.get('day_of_week', 0.5),
+        ])
+        
+        # Pending operations
+        features.extend([
+            len(environment_state.get('pending_operations', [])) / 10.0,  # Normalize
+            environment_state.get('provisioning_delay', 0.0) / 10.0,
+        ])
+        
+        # Pad or truncate to expected state size
+        features = features[:self.state_size] + [0.0] * max(0, self.state_size - len(features))
+        
+        return np.array(features, dtype=np.float32)
         x = F.relu(self.fc1(state))
         x = F.relu(self.fc2(x))
         # Using tanh to bound actions between -1 and 1
