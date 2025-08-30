@@ -1,10 +1,206 @@
 """
 Network Agent for MARL-GCP
--------------------------
+-----        # Bandwidth action: 3 options (decrease, no_change, increase)
+        # vpc_action: 0=no_change, 1=add_subnet, 2=optimize_routing (3 options)
+        # lb_action: 0=no_change, 1=enable_lb, 2=disable_lb (3 options)
+        # cdn_action: 0=no_change, 1=enable_cdn, 2=disable_cdn (3 options)
+        action_size = 3 * 3 * 3  # 27 discrete actions to match expected size
+        
+        # State space for network management - Fixed to match actual state size
+        state_size = 7  # Match actual state dimensions from environment
+        
+        super().__init__(config, "network", state_size, action_size)----------
 
 This module implements the specialized Network agent which is responsible for
-managing GCP networking resources like VPCs, subnets, firewalls, load balancers, etc.
+managing GCP network resources like VPCs, subnets, load balancers, etc.
 """
+
+from typing import Dict, List, Tuple, Any, Union
+import numpy as np
+import torch
+import logging
+
+from .base_agent import BaseAgent
+
+logger = logging.getLogger(__name__)
+
+
+class NetworkAgent(BaseAgent):
+    """
+    Network Agent for managing GCP network resources.
+    
+    This agent is responsible for:
+    - VPC and subnet management
+    - Load balancer configuration
+    - Bandwidth allocation
+    - CDN and caching strategies
+    """
+    
+    def __init__(self, config: Dict[str, Any]):
+        """
+        Initialize the Network Agent.
+        
+        Args:
+            config: Configuration dictionary for the network agent
+        """
+        # Network-specific action space
+        # Actions: [bandwidth_action, vpc_action, lb_action, cdn_action]
+        # bandwidth_action: 0=no_change, 1=increase, 2=decrease (3 options)
+        # vpc_action: 0=no_change, 1=add_subnet, 2=optimize_routing (3 options)
+        # lb_action: 0=no_change, 1=enable_lb, 2=disable_lb (3 options)
+        # cdn_action: 0=no_change, 1=enable_cdn, 2=disable_cdn (3 options)
+        action_size = 3 * 3 * 3 * 3  # 81 discrete actions
+        
+        # State space for network management - Fixed to match actual state size
+        state_size = 7  # Match actual state dimensions from environment
+        
+        super().__init__(config, "network", state_size, action_size)
+        
+        # Network-specific parameters
+        self.max_bandwidth_gbps = config.get('max_bandwidth_gbps', 100)
+        self.max_subnets = config.get('max_subnets', 20)
+        
+        # Reward weights
+        self.latency_weight = config.get('latency_weight', 0.4)
+        self.bandwidth_efficiency_weight = config.get('bandwidth_efficiency_weight', 0.3)
+        self.cost_efficiency_weight = config.get('cost_efficiency_weight', 0.3)
+        
+        logger.info(f"Network Agent initialized with {action_size} actions")
+    
+    def decode_action(self, action_index: int) -> Dict[str, int]:
+        """
+        Decode the discrete action index into network actions.
+        
+        Args:
+            action_index: Index of the selected action
+            
+        Returns:
+            Dictionary with decoded actions
+        """
+        bandwidth_action = action_index // (3 * 3 * 3)
+        remaining = action_index % (3 * 3 * 3)
+        
+        vpc_action = remaining // (3 * 3)
+        remaining = remaining % (3 * 3)
+        
+        lb_action = remaining // 3
+        cdn_action = remaining % 3
+        
+        return {
+            'bandwidth_action': bandwidth_action,  # 0=no_change, 1=increase, 2=decrease
+            'vpc_action': vpc_action,             # 0=no_change, 1=add_subnet, 2=optimize
+            'lb_action': lb_action,               # 0=no_change, 1=enable, 2=disable
+            'cdn_action': cdn_action              # 0=no_change, 1=enable, 2=disable
+        }
+    
+    def compute_reward_components(self, state: Dict[str, Any], action: Dict[str, int], 
+                                next_state: Dict[str, Any]) -> Dict[str, float]:
+        """
+        Compute reward components for network management.
+        
+        Args:
+            state: Current state
+            action: Action taken
+            next_state: Resulting state
+            
+        Returns:
+            Dictionary with reward components
+        """
+        rewards = {}
+        
+        # Latency performance reward
+        current_latency = next_state.get('network_latency_ms', 100.0)
+        target_latency = 50.0  # Target 50ms
+        latency_performance = max(0.0, 1.0 - (current_latency - target_latency) / target_latency)
+        rewards['latency'] = latency_performance * self.latency_weight
+        
+        # Bandwidth efficiency
+        bandwidth_used = next_state.get('bandwidth_used_gbps', 0.0)
+        bandwidth_allocated = next_state.get('bandwidth_allocated_gbps', 1.0)
+        bandwidth_efficiency = bandwidth_used / max(bandwidth_allocated, 0.1)
+        bandwidth_efficiency = min(1.0, bandwidth_efficiency)  # Cap at 1.0
+        rewards['bandwidth_efficiency'] = bandwidth_efficiency * self.bandwidth_efficiency_weight
+        
+        # Cost efficiency
+        network_cost = next_state.get('network_cost', 0.0)
+        budget = next_state.get('budget_remaining', 1000.0)
+        cost_efficiency = min(1.0, budget / max(network_cost, 1.0))
+        rewards['cost_efficiency'] = cost_efficiency * self.cost_efficiency_weight
+        
+        # CDN efficiency bonus
+        cdn_enabled = next_state.get('cdn_enabled', False)
+        cache_hit_ratio = next_state.get('cache_hit_ratio', 0.0)
+        if cdn_enabled and cache_hit_ratio > 0.7:
+            rewards['cdn_bonus'] = 0.1
+        else:
+            rewards['cdn_bonus'] = 0.0
+        
+        return rewards
+    
+    def get_state_features(self, environment_state: Dict[str, Any]) -> np.ndarray:
+        """
+        Extract network-relevant features from environment state.
+        
+        Args:
+            environment_state: Full environment state
+            
+        Returns:
+            Numpy array with state features
+        """
+        features = []
+        
+        # Current network resources
+        features.extend([
+            environment_state.get('network_bandwidth_gbps', 0) / self.max_bandwidth_gbps,
+            environment_state.get('network_load', 0.0),
+        ])
+        
+        # Network topology
+        features.extend([
+            environment_state.get('subnet_count', 0) / self.max_subnets,
+            environment_state.get('vpc_complexity', 0.0),
+        ])
+        
+        # Performance metrics
+        features.extend([
+            environment_state.get('network_latency_ms', 100.0) / 1000.0,  # Normalize to [0,1]
+            environment_state.get('bandwidth_utilization', 0.0),
+        ])
+        
+        # Load balancing and CDN
+        features.extend([
+            1.0 if environment_state.get('load_balancer', 'none') != 'none' else 0.0,
+            1.0 if environment_state.get('cdn_enabled', False) else 0.0,
+            environment_state.get('cache_hit_ratio', 0.0),
+        ])
+        
+        # Cost and budget
+        features.extend([
+            environment_state.get('network_cost', 0.0) / environment_state.get('max_budget', 1000.0),
+        ])
+        
+        # Coordination with other agents
+        features.extend([
+            environment_state.get('instances', 0) / 100.0,  # Compute influence
+            environment_state.get('storage_gb', 0) / 10000.0,  # Storage influence
+            environment_state.get('database_load', 0.0),   # Database influence
+        ])
+        
+        # Traffic patterns
+        features.extend([
+            environment_state.get('incoming_requests_per_sec', 0.0) / 1000.0,
+            environment_state.get('outgoing_traffic_gbps', 0.0) / 10.0,
+        ])
+        
+        # Time factors
+        features.extend([
+            environment_state.get('time_of_day', 0.5),
+        ])
+        
+        # Pad or truncate to expected state size
+        features = features[:self.state_size] + [0.0] * max(0, self.state_size - len(features))
+        
+        return np.array(features, dtype=np.float32)
 
 from typing import Dict, List, Tuple, Any, Union
 import numpy as np
@@ -13,7 +209,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import logging
 
-from marl_gcp.agents.base_agent import BaseAgent
+from .base_agent import BaseAgent
 
 logger = logging.getLogger(__name__)
 
@@ -119,76 +315,48 @@ class NetworkAgent(BaseAgent):
         Args:
             config: Configuration dictionary
         """
-        super(NetworkAgent, self).__init__(config, "network")
+        # Extract state and action sizes from config
+        # State space for network agent should match environment output
+        state_size = config.get('state_size', 7)  # Fixed to match actual dimensions
+        action_size = config.get('action_size', 27)  # 3^3 actions
+        
+        super().__init__(config, "network", state_size, action_size)
         
         # Network-specific configuration
         self.state_dim = config.get('state_dim', 4)  # State dimensions for network resources
         self.action_dim = config.get('action_dim', 6)  # Action dimensions for network resources
         self.hidden_dim = config.get('hidden_dim', 256)
         
-        # TD3-specific parameters
+        # TD3-specific parameters (not used with DQN)
         self.policy_noise = config.get('policy_noise', 0.2)
         self.noise_clip = config.get('noise_clip', 0.5)
         self.policy_freq = config.get('policy_freq', 2)
         self.update_counter = 0
         
-        # Create actor-critic networks
-        self.policy_net = NetworkActorNetwork(self.state_dim, self.action_dim, self.hidden_dim).to(self.device)
-        self.target_net = NetworkActorNetwork(self.state_dim, self.action_dim, self.hidden_dim).to(self.device)
-        self.target_net.load_state_dict(self.policy_net.state_dict())
+        # The DQN networks are already initialized in BaseAgent
+        # No need to create additional networks since we're using discrete actions with DQN
         
-        self.critic = NetworkCriticNetwork(self.state_dim, self.action_dim, self.hidden_dim).to(self.device)
-        self.critic_target = NetworkCriticNetwork(self.state_dim, self.action_dim, self.hidden_dim).to(self.device)
-        self.critic_target.load_state_dict(self.critic.state_dict())
-        
-        # Optimizers
-        self.actor_optimizer = torch.optim.Adam(self.policy_net.parameters(), lr=self.learning_rate)
-        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.learning_rate)
-        
-        # Action scaling
-        self.max_action = config.get('max_action', 1.0)
+        logger.info(f"Initialized Network Agent with state_dim={self.state_dim}, action_dim={self.action_dim}")
         
         logger.info(f"Initialized Network Agent with state_dim={self.state_dim}, action_dim={self.action_dim}")
     
-    def select_action(self, state: np.ndarray, deterministic: bool = False) -> np.ndarray:
+    def select_action(self, state: np.ndarray, deterministic: bool = False) -> int:
         """
-        Select an action based on the current state.
+        Select an action based on the current state using DQN.
         
         Args:
             state: Current state observation
             deterministic: If True, select the best action (no exploration)
             
         Returns:
-            Action to take
+            Discrete action to take (0-26 for 3^3 actions)
         """
-        # Convert state to torch tensor
-        state_tensor = torch.FloatTensor(state).to(self.device)
-        
-        # Set networks to evaluation mode
-        self.policy_net.eval()
-        
-        with torch.no_grad():
-            # Get action from policy network
-            action = self.policy_net(state_tensor).cpu().numpy()
-        
-        # Set networks back to training mode if needed
-        if self.training:
-            self.policy_net.train()
-        
-        # Add noise for exploration during training
-        if not deterministic and self.training:
-            noise = np.random.normal(0, self.policy_noise, size=action.shape)
-            noise = np.clip(noise, -self.noise_clip, self.noise_clip)
-            action = action + noise
-        
-        # Clip action to valid range
-        action = np.clip(action, -self.max_action, self.max_action)
-        
-        return action
+        # Use the BaseAgent's select_action method which implements epsilon-greedy DQN
+        return super().select_action(state, deterministic)
     
     def update(self, experiences: Dict[str, torch.Tensor]) -> Dict[str, float]:
         """
-        Update the agent's policy based on experiences.
+        Update the agent's policy based on experiences using DQN.
         
         Args:
             experiences: Dictionary with state, action, reward, next_state, and done tensors
@@ -196,70 +364,5 @@ class NetworkAgent(BaseAgent):
         Returns:
             Dictionary with update metrics
         """
-        states = experiences['states']
-        actions = experiences['actions']
-        rewards = experiences['rewards']
-        next_states = experiences['next_states']
-        dones = experiences['dones']
-        
-        # Compute target Q values
-        with torch.no_grad():
-            # Select next actions using target policy
-            noise = torch.randn_like(actions) * self.policy_noise
-            noise = torch.clamp(noise, -self.noise_clip, self.noise_clip)
-            
-            next_actions = self.target_net(next_states) + noise
-            next_actions = torch.clamp(next_actions, -self.max_action, self.max_action)
-            
-            # Compute target Q values
-            target_q1, target_q2 = self.critic_target(next_states, next_actions)
-            target_q = torch.min(target_q1, target_q2)
-            target_q = rewards + (1 - dones) * self.gamma * target_q
-        
-        # Compute current Q values
-        current_q1, current_q2 = self.critic(states, actions)
-        
-        # Compute critic loss
-        critic_loss = F.mse_loss(current_q1, target_q) + F.mse_loss(current_q2, target_q)
-        
-        # Optimize the critic
-        self.critic_optimizer.zero_grad()
-        critic_loss.backward()
-        self.critic_optimizer.step()
-        
-        # Delayed policy updates
-        actor_loss = 0.0
-        if self.update_counter % self.policy_freq == 0:
-            # Compute actor loss
-            actor_loss = -self.critic(states, self.policy_net(states))[0].mean()
-            
-            # Optimize the actor
-            self.actor_optimizer.zero_grad()
-            actor_loss.backward()
-            self.actor_optimizer.step()
-            
-            # Update target networks
-            self._soft_update()
-        
-        self.update_counter += 1
-        
-        return {
-            'critic_loss': critic_loss.item(),
-            'actor_loss': actor_loss if isinstance(actor_loss, float) else actor_loss.item()
-        }
-    
-    def _soft_update(self) -> None:
-        """
-        Soft update of the target network parameters.
-        """
-        # Update critic target
-        for target_param, param in zip(self.critic_target.parameters(), self.critic.parameters()):
-            target_param.data.copy_(
-                self.tau * param.data + (1.0 - self.tau) * target_param.data
-            )
-        
-        # Update actor target
-        for target_param, param in zip(self.target_net.parameters(), self.policy_net.parameters()):
-            target_param.data.copy_(
-                self.tau * param.data + (1.0 - self.tau) * target_param.data
-            ) 
+        # Use the BaseAgent's update method which implements DQN learning
+        return super().update(experiences) 

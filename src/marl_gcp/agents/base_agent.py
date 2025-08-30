@@ -196,7 +196,97 @@ class BaseAgent:
         
         # Convert to tensors
         states = torch.stack(states).to(self.device)
-        actions = torch.LongTensor(actions).to(self.device)
+        # Convert actions to proper format with robust handling
+        if isinstance(actions, (tuple, list)):
+            # Handle list/tuple of actions
+            action_list = []
+            for a in actions:
+                try:
+                    if isinstance(a, (tuple, list)):
+                        # Nested structure - take first element
+                        if len(a) > 0:
+                            val = a[0]
+                            if hasattr(val, 'item'):
+                                val = int(val.item())
+                            else:
+                                val = int(val)
+                            # Clamp to valid action range
+                            action_list.append(max(0, min(val, self.action_size - 1)))
+                        else:
+                            action_list.append(0)
+                    elif hasattr(a, 'item'):  # numpy scalar or tensor
+                        # Check if it's actually a scalar (size 1)
+                        if hasattr(a, 'size') and (a.size == 1 or (hasattr(a, 'shape') and a.shape == ())):
+                            val = int(a.item())
+                        elif hasattr(a, 'flat'):
+                            # Multi-element array - take first
+                            val = int(a.flat[0])
+                        elif hasattr(a, '__len__') and len(a) > 0:
+                            val = int(a[0])
+                        else:
+                            val = int(a.item())
+                        # Clamp to valid action range
+                        action_list.append(max(0, min(val, self.action_size - 1)))
+                    elif hasattr(a, '__len__') and len(a) == 1:  # single-element array
+                        val = int(a[0])
+                        action_list.append(max(0, min(val, self.action_size - 1)))
+                    else:  # regular scalar
+                        val = int(a)
+                        action_list.append(max(0, min(val, self.action_size - 1)))
+                except (ValueError, TypeError, AttributeError):
+                    # Fallback to 0 if conversion fails
+                    action_list.append(0)
+            actions = torch.LongTensor(action_list).to(self.device)
+        elif hasattr(actions, 'shape') and len(actions.shape) > 1:
+            # Handle multi-dimensional numpy array
+            action_list = []
+            for a in actions.flatten():
+                try:
+                    if hasattr(a, 'item'):
+                        val = int(a.item())
+                    else:
+                        val = int(a)
+                    # Clamp to valid action range
+                    action_list.append(max(0, min(val, self.action_size - 1)))
+                except (ValueError, TypeError):
+                    action_list.append(0)
+            actions = torch.LongTensor(action_list).to(self.device)
+        else:
+            # Handle single action or array
+            if hasattr(actions, '__len__') and not isinstance(actions, str):
+                action_list = []
+                for a in actions:
+                    try:
+                        if hasattr(a, 'item'):  # numpy scalar
+                            # Check if it's actually a scalar
+                            if hasattr(a, 'size') and (a.size == 1 or (hasattr(a, 'shape') and a.shape == ())):
+                                val = int(a.item())
+                            elif hasattr(a, 'flat'):
+                                # Multi-element array - take first
+                                val = int(a.flat[0])
+                            else:
+                                val = int(a.item())
+                            # Clamp to valid action range
+                            action_list.append(max(0, min(val, self.action_size - 1)))
+                        elif hasattr(a, '__len__') and len(a) == 1:  # single-element array
+                            val = int(a[0])
+                            action_list.append(max(0, min(val, self.action_size - 1)))
+                        else:  # regular scalar
+                            val = int(a)
+                            action_list.append(max(0, min(val, self.action_size - 1)))
+                    except (ValueError, TypeError, AttributeError):
+                        action_list.append(0)
+                actions = torch.LongTensor(action_list).to(self.device)
+            else:
+                try:
+                    if hasattr(actions, 'item'):
+                        val = int(actions.item())
+                        actions = torch.LongTensor([max(0, min(val, self.action_size - 1))]).to(self.device)
+                    else:
+                        val = int(actions)
+                        actions = torch.LongTensor([max(0, min(val, self.action_size - 1))]).to(self.device)
+                except (ValueError, TypeError):
+                    actions = torch.LongTensor([0]).to(self.device)
         rewards = torch.FloatTensor(rewards).to(self.device)
         next_states = torch.stack(next_states).to(self.device)
         dones = torch.BoolTensor(dones).to(self.device)

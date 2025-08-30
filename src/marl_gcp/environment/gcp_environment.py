@@ -100,12 +100,15 @@ class GCPEnvironment(gym.Env):
         # Initialize workload generator with real Google Cluster data
         self.workload_generator = None
         try:
-            from marl_gcp.data.workload_generator import WorkloadGenerator
+            from ..data.workload_generator import WorkloadGenerator
             workload_config = config.get('workload_generator', {})
-            # Ensure proper data paths
-            workload_config['data_dir'] = config.get('cluster_data', {}).get('data_dir', 'data/processed')
-            workload_config['cache_dir'] = config.get('cluster_data', {}).get('cache_dir', 'data/google_cluster')
-            workload_config['viz_dir'] = config.get('viz_dir', 'visualizations')
+            # Only set data paths if they're not already configured
+            if 'data_dir' not in workload_config:
+                workload_config['data_dir'] = config.get('cluster_data', {}).get('data_dir', 'data/processed')
+            if 'cache_dir' not in workload_config:
+                workload_config['cache_dir'] = config.get('cluster_data', {}).get('cache_dir', 'data/google_cluster')
+            if 'viz_dir' not in workload_config:
+                workload_config['viz_dir'] = config.get('viz_dir', 'visualizations')
             
             self.workload_generator = WorkloadGenerator(workload_config)
             logger.info("Initialized workload generator with real Google Cluster data")
@@ -594,7 +597,7 @@ class GCPEnvironment(gym.Env):
         """
         # Import the enhanced reward engine
         try:
-            from marl_gcp.utils.reward_engine import EnhancedRewardEngine
+            from ..utils.reward_engine import EnhancedRewardEngine
             
             # Initialize reward engine if not already done
             if not hasattr(self, 'reward_engine'):
@@ -1134,3 +1137,12 @@ class GCPEnvironment(gym.Env):
             self.workload_generator.visualize_patterns(steps)
         else:
             logger.warning("No workload generator available for visualization")
+    
+    def get_current_state(self) -> Dict[str, np.ndarray]:
+        """
+        Get the current state of the environment.
+        
+        Returns:
+            Dictionary with current state for each agent
+        """
+        return self._get_observation()

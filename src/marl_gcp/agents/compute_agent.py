@@ -13,7 +13,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import logging
 
-from marl_gcp.agents.base_agent import BaseAgent
+from .base_agent import BaseAgent
 
 logger = logging.getLogger(__name__)
 
@@ -277,12 +277,22 @@ class ComputeAgent(BaseAgent):
         Args:
             config: Configuration dictionary
         """
-        super(ComputeAgent, self).__init__(config, "compute")
+        # Extract state and action sizes from config
+        state_size = config.get('state_size', 20)
+        action_size = config.get('action_size', 81)  # 3^4 actions
+        
+        super().__init__(config, "compute", state_size, action_size)
         
         # Compute-specific configuration
         self.state_dim = config.get('state_dim', 10)  # State dimensions for compute resources
         self.action_dim = config.get('action_dim', 5)  # Action dimensions for compute resources
         self.hidden_dim = config.get('hidden_dim', 256)
+        
+        # Action space configuration for discrete action decoding
+        self.instance_types = ['small', 'medium', 'large']
+        self.cpu_configs = ['low', 'medium', 'high']
+        self.memory_configs = ['low', 'medium', 'high']
+        self.storage_configs = ['minimal', 'standard', 'high']
         
         # TD3-specific parameters
         self.policy_noise = config.get('policy_noise', 0.2)
@@ -290,63 +300,27 @@ class ComputeAgent(BaseAgent):
         self.policy_freq = config.get('policy_freq', 2)
         self.update_counter = 0
         
-        # Create actor-critic networks
-        self.policy_net = ComputeActorNetwork(self.state_dim, self.action_dim, self.hidden_dim).to(self.device)
-        self.target_net = ComputeActorNetwork(self.state_dim, self.action_dim, self.hidden_dim).to(self.device)
-        self.target_net.load_state_dict(self.policy_net.state_dict())
-        
-        self.critic = ComputeCriticNetwork(self.state_dim, self.action_dim, self.hidden_dim).to(self.device)
-        self.critic_target = ComputeCriticNetwork(self.state_dim, self.action_dim, self.hidden_dim).to(self.device)
-        self.critic_target.load_state_dict(self.critic.state_dict())
-        
-        # Optimizers
-        self.actor_optimizer = torch.optim.Adam(self.policy_net.parameters(), lr=self.learning_rate)
-        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.learning_rate)
-        
-        # Action scaling
-        self.max_action = config.get('max_action', 1.0)
+        # The DQN networks are already initialized in BaseAgent
+        # No need to create additional networks since we're using discrete actions with DQN
         
         logger.info(f"Initialized Compute Agent with state_dim={self.state_dim}, action_dim={self.action_dim}")
     
-    def select_action(self, state: np.ndarray, deterministic: bool = False) -> np.ndarray:
+    def select_action(self, state: np.ndarray, deterministic: bool = False) -> int:
         """
-        Select an action based on the current state.
+        Select an action based on the current state using DQN.
         
         Args:
             state: Current state observation
             deterministic: If True, select the best action (no exploration)
             
         Returns:
-            Action to take
+            Discrete action to take (0-80 for 3^4 actions)
         """
-        # Convert state to torch tensor
-        state_tensor = torch.FloatTensor(state).to(self.device)
-        
-        # Set networks to evaluation mode
-        self.policy_net.eval()
-        
-        with torch.no_grad():
-            # Get action from policy network
-            action = self.policy_net(state_tensor).cpu().numpy()
-        
-        # Set networks back to training mode if needed
-        if self.training:
-            self.policy_net.train()
-        
-        # Add noise for exploration during training
-        if not deterministic and self.training:
-            noise = np.random.normal(0, self.policy_noise, size=action.shape)
-            noise = np.clip(noise, -self.noise_clip, self.noise_clip)
-            action = action + noise
-        
-        # Clip action to valid range
-        action = np.clip(action, -self.max_action, self.max_action)
-        
-        return action
-    
+        # Use the BaseAgent's select_action method which implements epsilon-greedy DQN
+        return super().select_action(state, deterministic)
     def update(self, experiences: Dict[str, torch.Tensor]) -> Dict[str, float]:
         """
-        Update the agent's policy based on experiences.
+        Update the agent's policy based on experiences using DQN.
         
         Args:
             experiences: Dictionary with state, action, reward, next_state, and done tensors
@@ -354,73 +328,31 @@ class ComputeAgent(BaseAgent):
         Returns:
             Dictionary with update metrics
         """
-        states = experiences['states']
-        actions = experiences['actions']
-        rewards = experiences['rewards']
-        next_states = experiences['next_states']
-        dones = experiences['dones']
+        # Use the BaseAgent's update method which implements DQN learning
+        return super().update(experiences)
+
+    def decode_action(self, action: int) -> Dict[str, str]:
+        """
+        Decode the discrete action into compute management parameters.
         
-        # --- Update critic ---
-        with torch.no_grad():
-            # Select action according to target policy and add noise
-            noise = torch.randn_like(actions) * self.policy_noise
-            noise = noise.clamp(-self.noise_clip, self.noise_clip)
+        Args:
+            action: Integer action (0-80)
             
-            next_actions = self.target_net(next_states) + noise
-            next_actions = next_actions.clamp(-self.max_action, self.max_action)
-            
-            # Get Q values from target critics
-            target_q1, target_q2 = self.critic_target(next_states, next_actions)
-            target_q = torch.min(target_q1, target_q2)
-            
-            # Compute target Q value
-            target_q = rewards + (1 - dones) * self.gamma * target_q
-        
-        # Get current Q estimates
-        current_q1, current_q2 = self.critic(states, actions)
-        
-        # Compute critic loss
-        critic_loss = F.mse_loss(current_q1, target_q) + F.mse_loss(current_q2, target_q)
-        
-        # Optimize the critic
-        self.critic_optimizer.zero_grad()
-        critic_loss.backward()
-        self.critic_optimizer.step()
-        
-        # --- Update actor (delayed) ---
-        actor_loss = 0.0
-        
-        if self.update_counter % self.policy_freq == 0:
-            # Compute actor loss
-            actor_loss = -self.critic(states, self.policy_net(states))[0].mean()
-            
-            # Optimize the actor
-            self.actor_optimizer.zero_grad()
-            actor_loss.backward()
-            self.actor_optimizer.step()
-            
-            # Update target networks
-            self._soft_update()
-        
-        self.update_counter += 1
+        Returns:
+            Dictionary with decoded action parameters
+        """
+        # Convert to 3-base representation for 4 parameters
+        instance_type_idx = action % 3
+        action //= 3
+        cpu_config_idx = action % 3
+        action //= 3
+        memory_config_idx = action % 3
+        action //= 3
+        storage_config_idx = action % 3
         
         return {
-            'critic_loss': critic_loss.item(),
-            'actor_loss': actor_loss if isinstance(actor_loss, float) else actor_loss.item()
-        }
-    
-    def _soft_update(self) -> None:
-        """
-        Soft update of the target network parameters.
-        """
-        # Update critic target
-        for target_param, param in zip(self.critic_target.parameters(), self.critic.parameters()):
-            target_param.data.copy_(
-                self.tau * param.data + (1.0 - self.tau) * target_param.data
-            )
-        
-        # Update actor target
-        for target_param, param in zip(self.target_net.parameters(), self.policy_net.parameters()):
-            target_param.data.copy_(
-                self.tau * param.data + (1.0 - self.tau) * target_param.data
-            ) 
+            'instance_type': self.instance_types[instance_type_idx],
+            'cpu_config': self.cpu_configs[cpu_config_idx],
+            'memory_config': self.memory_configs[memory_config_idx],
+            'storage_config': self.storage_configs[storage_config_idx]
+        } 

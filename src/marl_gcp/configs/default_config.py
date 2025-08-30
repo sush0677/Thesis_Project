@@ -13,8 +13,8 @@ def get_default_config() -> Dict[str, Any]:
     Returns:
         Dictionary with default configuration
     """
-    # Get project root directory
-    project_root = Path(os.path.abspath(__file__)).parents[2]
+    # Get project root directory (src/marl_gcp/configs -> src/marl_gcp -> src -> project_root)
+    project_root = Path(os.path.abspath(__file__)).parents[3]
     
     # Base configuration
     config = {
@@ -49,6 +49,17 @@ def get_default_config() -> Dict[str, Any]:
         # Workload generator
         'use_workload_generator': True,
         'workload_generator': {
+            'type': 'google_cluster',  # Force google_cluster type
+            'use_real_data': True,    # Ensure real data is used
+            'data_path': os.path.join(project_root, 'data', 'processed', 'processed_data.parquet'),
+            'feature_stats_path': os.path.join(project_root, 'data', 'processed', 'feature_statistics.json'),
+            'workload_patterns_path': os.path.join(project_root, 'data', 'processed', 'workload_patterns.json'),
+            'cluster_patterns_path': os.path.join(project_root, 'data', 'processed', 'cluster_workload_patterns.json'),
+            'pattern_transitions': True,
+            'pattern_duration_steps': 20,
+            'seasonal_effects': True
+        },
+        'workload_generator': {
             'data_dir': str(project_root / 'data' / 'processed'),
             'viz_dir': str(project_root / 'visualizations'),
             'default_pattern': 'steady'
@@ -67,47 +78,52 @@ def get_default_config() -> Dict[str, Any]:
         # Visualization
         'viz_dir': str(project_root / 'visualizations'),
         
-        # Agent settings - Updated for real Google Cluster data features
+        # RL Training Parameters
+        'gamma': 0.99,                    # Discount factor
+        'learning_rate': 0.001,           # Learning rate for all agents
+        'epsilon_start': 1.0,             # Initial exploration rate
+        'epsilon_min': 0.01,              # Minimum exploration rate
+        'epsilon_decay': 0.995,           # Exploration decay rate
+        'batch_size': 64,                 # Batch size for training
+        'buffer_size': 100000,            # Experience replay buffer size
+        'update_frequency': 4,            # Steps between agent updates
+        'target_update_frequency': 100,   # Steps between target network updates
+        'hidden_sizes': [256, 256],       # Neural network hidden layer sizes
+        'tau': 0.005,                     # Soft update parameter for target networks
+        
+        # Agent settings - Updated for DQN implementation
         'agents': {
+            'action_space_size': 4,  # Reduced to prevent indexing errors
             'compute': {
-                'learning_rate': 3e-4,
-                'gamma': 0.99,
-                'tau': 0.005,
-                'hidden_dim': 256,
-                'batch_size': 256,
-                'buffer_size': 1000000,
-                'state_dim': 9,   # cpu_rate(1) + memory_usage(1) + disk_usage(1) + io_time(1) + active_machines(1) + active_tasks(1) + cpu_memory_ratio(1) + io_ratio(1) + cost(1)
-                'action_dim': 5   # Scale instances, CPU, memory, region, instance type
+                'max_instances': 100,
+                'max_cpus': 500,
+                'max_memory': 1000,
+                'instance_types': ['n1-standard-1', 'n1-standard-2', 'n1-standard-4'],
+                'cpu_efficiency_weight': 0.3,
+                'memory_efficiency_weight': 0.3,
+                'cost_efficiency_weight': 0.4
             },
             'storage': {
-                'learning_rate': 3e-4,
-                'gamma': 0.99,
-                'tau': 0.005,
-                'hidden_dim': 256,
-                'batch_size': 256,
-                'buffer_size': 1000000,
-                'state_dim': 4,   # disk_usage(1) + io_time(1) + io_ratio(1) + cost(1)
-                'action_dim': 4   # Scale storage, type, replication, location
+                'max_storage_gb': 10000,
+                'storage_types': ['standard', 'ssd', 'archive'],
+                'utilization_weight': 0.4,
+                'cost_efficiency_weight': 0.3,
+                'performance_weight': 0.3
             },
             'network': {
-                'learning_rate': 3e-4,
-                'gamma': 0.99,
-                'tau': 0.005,
-                'hidden_dim': 256,
-                'batch_size': 256,
-                'buffer_size': 1000000,
-                'state_dim': 7,   # cpu_rate(1) + memory_usage(1) + active_machines(1) + active_tasks(1) + cpu_memory_ratio(1) + io_ratio(1) + cost(1)
-                'action_dim': 6   # bandwidth_scale, vpc_config, subnet_count, firewall_rules, load_balancer, cdn_enabled
+                'max_bandwidth_gbps': 100,
+                'max_subnets': 20,
+                'latency_weight': 0.4,
+                'bandwidth_efficiency_weight': 0.3,
+                'cost_efficiency_weight': 0.3
             },
             'database': {
-                'learning_rate': 3e-4,
-                'gamma': 0.99,
-                'tau': 0.005,
-                'hidden_dim': 256,
-                'batch_size': 256,
-                'buffer_size': 1000000,
-                'state_dim': 7,   # cpu_rate(1) + memory_usage(1) + disk_usage(1) + io_time(1) + active_machines(1) + active_tasks(1) + cost(1)
-                'action_dim': 3   # scale_instances, scale_storage, type
+                'max_db_instances': 50,
+                'max_db_storage_gb': 5000,
+                'database_types': ['sql', 'nosql', 'managed'],
+                'query_performance_weight': 0.4,
+                'resource_efficiency_weight': 0.3,
+                'cost_efficiency_weight': 0.3
             }
         },
         
@@ -122,11 +138,11 @@ def get_default_config() -> Dict[str, Any]:
         
         # Training settings
         'training': {
-            'num_episodes': 1000,
+            'num_episodes': 3,  # Reduced for testing
             'eval_frequency': 10,
             'save_frequency': 50,
             'log_frequency': 1,
-            'max_steps_per_episode': 200,
+            'max_steps_per_episode': 50,  # Reduced for faster testing
             'update_frequency': 1,
             'target_update_frequency': 10,
             'checkpoint_dir': str(project_root / 'checkpoints')
@@ -135,9 +151,9 @@ def get_default_config() -> Dict[str, Any]:
         # Results and model directories
         'results_dir': str(project_root / 'results'),
         'save_dir': str(project_root / 'models'),
-        'experiment_name': 'marl_gcp_default',
-        'eval_episodes': 10,
-        'num_episodes': 1000,
+        'experiment_name': 'marl_gcp_real_data',  # Updated experiment name
+        'eval_episodes': 2,  # Reduced for testing
+        'num_episodes': 3,   # Reduced for testing
         'random_seed': 42,
         'log_level': 'INFO',
         

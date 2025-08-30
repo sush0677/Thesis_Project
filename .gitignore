@@ -9,6 +9,10 @@ data/
 data/*
 data/**/*
 
+# document
+docs/*
+docs/**/*
+
 # Specific large files
 *.json.gz
 *.parquet.gz

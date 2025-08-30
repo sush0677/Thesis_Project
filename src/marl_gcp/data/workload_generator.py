@@ -157,23 +157,32 @@ class WorkloadGenerator:
             if stats_file.exists():
                 with open(stats_file, 'r') as f:
                     stats = json.load(f)
-                logger.info(f"✅ Loaded feature statistics: {list(stats.keys())}")
-                return stats
+                # Check if file is not empty
+                if stats and len(stats) > 0:
+                    logger.info(f"✅ Loaded feature statistics: {list(stats.keys())}")
+                    return stats
+                else:
+                    logger.warning("⚠️ Feature statistics file is empty")
             
-            # If not found, try to load from cache directory
+            # If not found or empty, try to load from cache directory
             cache_stats_file = self.cache_dir / 'feature_statistics.json'
             if cache_stats_file.exists():
                 with open(cache_stats_file, 'r') as f:
                     stats = json.load(f)
-                logger.info(f"✅ Loaded feature statistics from cache: {list(stats.keys())}")
-                return stats
+                if stats and len(stats) > 0:
+                    logger.info(f"✅ Loaded feature statistics from cache: {list(stats.keys())}")
+                    return stats
             
-            # If still not found, generate statistics from loaded data
+            # Generate statistics from loaded data
             if self.cluster_data is not None:
-                logger.info("📊 Generating feature statistics from loaded data...")
+                logger.info("📊 Generating feature statistics from real cluster data...")
                 stats = self._generate_feature_statistics()
-                logger.info(f"✅ Generated feature statistics: {list(stats.keys())}")
-                return stats
+                if stats and len(stats) > 0:
+                    # Save the generated statistics
+                    with open(stats_file, 'w') as f:
+                        json.dump(stats, f, indent=2)
+                    logger.info(f"✅ Generated and saved feature statistics: {list(stats.keys())}")
+                    return stats
             else:
                 logger.error(f"❌ Feature statistics not found and no data available to generate from")
                 return None
@@ -195,23 +204,32 @@ class WorkloadGenerator:
             if patterns_file.exists():
                 with open(patterns_file, 'r') as f:
                     patterns = json.load(f)
-                logger.info(f"✅ Loaded workload patterns: {list(patterns.keys())}")
-                return patterns
+                # Check if file is not empty
+                if patterns and len(patterns) > 0:
+                    logger.info(f"✅ Loaded workload patterns: {list(patterns.keys())}")
+                    return patterns
+                else:
+                    logger.warning("⚠️ Workload patterns file is empty")
             
-            # If not found, try to load from cache directory
+            # If not found or empty, try to load from cache directory
             cache_patterns_file = self.cache_dir / 'workload_patterns.json'
             if cache_patterns_file.exists():
                 with open(cache_patterns_file, 'r') as f:
                     patterns = json.load(f)
-                logger.info(f"✅ Loaded workload patterns from cache: {list(patterns.keys())}")
-                return patterns
+                if patterns and len(patterns) > 0:
+                    logger.info(f"✅ Loaded workload patterns from cache: {list(patterns.keys())}")
+                    return patterns
             
-            # If still not found, generate patterns from loaded data
+            # Generate patterns from loaded data
             if self.cluster_data is not None:
-                logger.info("📊 Generating workload patterns from loaded data...")
+                logger.info("📊 Generating workload patterns from real cluster data...")
                 patterns = self._generate_workload_patterns()
-                logger.info(f"✅ Generated workload patterns: {list(patterns.keys())}")
-                return patterns
+                if patterns and len(patterns) > 0:
+                    # Save the generated patterns
+                    with open(patterns_file, 'w') as f:
+                        json.dump(patterns, f, indent=2)
+                    logger.info(f"✅ Generated and saved workload patterns: {list(patterns.keys())}")
+                    return patterns
             else:
                 logger.error(f"❌ Workload patterns not found and no data available to generate from")
                 return None
